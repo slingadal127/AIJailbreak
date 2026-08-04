@@ -1,0 +1,26 @@
+# RedTeamAgent — Python dependencies
+# Pinned for reproducibility
+
+# Backend (FastAPI + auth)
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+python-jose[cryptography]==3.3.0
+bcrypt==4.2.0
+
+# Frontend (Streamlit thin client)
+streamlit==1.39.0
+requests==2.32.3
+pandas==2.2.3
+
+# LLM + orchestration
+openai==1.51.2
+langgraph==0.2.34
+python-dotenv==1.0.1
+
+# RAG + embeddings
+chromadb==0.5.15
+sentence-transformers==3.1.1
+
+# Testing
+httpx==0.27.2

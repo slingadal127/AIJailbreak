@@ -1,0 +1,65 @@
+# Secrets — NEVER COMMIT
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# Databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# ChromaDB
+chroma_db/
+chromadb/
+.chroma/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Virtual environments — ALL variants
+.venv/
+.venv-1/
+.venv-*/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# HuggingFace / model caches
+.cache/
+.huggingface/
+models/
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+
+# Bias audit outputs
+bias_audit_*.json
+
+# Demo scratch
+demo_screenshots/
+scratch/
