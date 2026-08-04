@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-backend.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-backend.txt
+
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+COPY api.py auth.py auth_db.py redteam_core.py \
+     redteam_filter.py redteam_drift.py redteam_bias.py \
+     redteam_adaptive.py redteam_metrics.py \
+     judge_eval_set.json ./
+COPY prompts ./prompts
+
+# Ensure /data exists and is writable (mounted volume for auth DB + verdicts)
+RUN mkdir -p /data && chmod 777 /data
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,55 @@
+# RedTeamAgent — local orchestration
+#
+# This file lives in docker/ but the build context is the PROJECT ROOT (..),
+# so Dockerfiles can COPY files from the top-level layout.
+#
+# Run from the PROJECT ROOT:
+#   docker compose -f docker/docker-compose.yml up --build
+#
+# Or from THIS folder:
+#   cd docker && docker compose up --build
+#
+# Docker Compose reads .env from the SAME folder as compose.yml, so we point
+# it at the project root's .env explicitly.
+
+services:
+  backend:
+    build:
+      context: ..                        # project root
+      dockerfile: docker/Dockerfile.backend
+    container_name: redteam-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env                          # secrets live at project root
+    environment:
+      # Explicit overrides / defaults (env_file provides the rest)
+      ALLOWED_ORIGINS: "http://localhost:8501,http://frontend:8501"
+      AUTH_DB_PATH: /data/redteam_auth.db
+    volumes:
+      - backend-data:/data               # persist auth DB + verdicts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..                        # project root
+      dockerfile: docker/Dockerfile.frontend
+    container_name: redteam-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      REDTEAM_API_BASE: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+    driver: local
