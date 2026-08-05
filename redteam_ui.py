@@ -157,6 +157,7 @@ def render_run_sweep():
             st.error("Please enter a target behavior.")
             return
 
+        # ── API call inside status (spinner shows while waiting) ──
         with st.status("Calling backend...", expanded=True) as status:
             st.write("POST /sweep — authenticated with JWT")
             ok, result = api_call("POST", "/sweep", json={
@@ -166,6 +167,7 @@ def render_run_sweep():
                 "max_mutations": max_mutations,
                 "filter_mode": "research",
             })
+
             if not ok:
                 status.update(label="Sweep failed", state="error")
                 st.error(result.get("error", "Unknown error."))
@@ -182,13 +184,17 @@ def render_run_sweep():
                     st.warning(
                         f"Filter detected obfuscation and de-obfuscated via "
                         f"**{detail.get('matched_view')}** normalization.")
-                with st.expander("🔍 Pre-flight detail (for audit)"):
-                    st.json(detail)
-                return
+            else:
+                for line in result.get("node_log", []):
+                    st.code(line, language=None)
+                status.update(label="Sweep complete ✅", state="complete")
 
-            for line in result.get("node_log", []):
-                st.code(line, language=None)
-            status.update(label="Sweep complete ✅", state="complete")
+        # ── Rendering OUTSIDE the status container ──
+        # (st.status is itself an expander; expanders can't nest.)
+        if result.get("blocked"):
+            with st.expander("🔍 Pre-flight detail (for audit)"):
+                st.json(result.get("block_detail", {}))
+            return
 
         # ── Mode banner: benign vs adversarial ───────────────────────
         mode = result.get("mode", "adversarial")
@@ -222,7 +228,6 @@ def render_run_sweep():
         counts = Counter(v["verdict"] for v in verdicts)
 
         if mode == "benign":
-            # Different counters for benign mode — HELPFUL / HEDGED / OVER_REFUSED
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Evaluated", len(verdicts))
             m2.metric("HELPFUL", counts.get("HELPFUL", 0))
