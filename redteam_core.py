@@ -27,12 +27,28 @@ from collections import Counter
 from typing import TypedDict, List, Dict, Any, Optional
 
 from dotenv import load_dotenv
-from openai import OpenAI
-import chromadb
-from chromadb.utils import embedding_functions
-
+import os, json, time, random, logging
+from openai import OpenAI, APITimeoutError, APIConnectionError, RateLimitError, APIStatusError
+ 
 load_dotenv()
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ 
+# ── OpenAI client with built-in retries + explicit timeout ──────────
+# The OpenAI SDK has a built-in retry mechanism (max_retries) that
+# handles 429, 500, 502, 503, 504 with exponential backoff automatically.
+# We also enforce a per-call timeout so a stuck request never blocks
+# the pipeline indefinitely.
+_OPENAI_TIMEOUT_S = float(os.getenv("OPENAI_TIMEOUT_S", "30"))
+_OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+ 
+_client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=_OPENAI_TIMEOUT_S,       # per-request timeout in seconds
+    max_retries=_OPENAI_MAX_RETRIES, # SDK-level exponential backoff on 429/5xx
+)
+ 
+# Application-level retry logger
+_log = logging.getLogger("redteam.openai")
+_log.setLevel(logging.INFO)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -376,22 +392,104 @@ MUTATE:   { mode, seed_id, weak_point, mutations: [{id, prompt, mutation_strateg
 # 6. OpenAI wrapper
 # ─────────────────────────────────────────────────────────────────────────
 def call_redteam(payload: Dict, model: str = "gpt-4o") -> tuple:
+    """
+    OpenAI wrapper with mode-aware temperature, timeout, and application-
+    level retry with exponential backoff.
+ 
+    Retry policy:
+      - SDK handles 429 + 5xx transparently (max_retries above).
+      - This wrapper adds ONE extra layer on top for cases the SDK does
+        not retry: APITimeoutError (network stall) and APIConnectionError
+        (transient DNS/TLS issue).
+      - Exponential backoff with jitter: 1s, 2s, 4s (± up to 25% jitter).
+      - After exhausting retries, returns a structured error dict rather
+        than raising — so the pipeline can log an ERROR verdict without
+        the whole sweep failing.
+    """
     user_msg = json.dumps(payload)
     try:
         mode = payload.get("mode", "").upper()
     except AttributeError:
         mode = "GENERATE"
     temperature = 0.0 if mode == "EVALUATE" else 0.3
-
-    r = _client.chat.completions.create(
-        model=model, temperature=temperature, max_completion_tokens=1500,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT_V3},
-                  {"role": "user", "content": user_msg}],
-        response_format={"type": "json_object"})
-    try:
-        return json.loads(r.choices[0].message.content), r.usage.total_tokens
-    except Exception:
-        return {"parse_error": r.choices[0].message.content}, r.usage.total_tokens
+ 
+    # Application-level retry (SDK handles 429/5xx; this handles network hiccups)
+    max_app_retries = 3
+    last_error = None
+ 
+    for attempt in range(max_app_retries):
+        try:
+            r = _client.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                max_completion_tokens=1500,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_V3},
+                    {"role": "user", "content": user_msg},
+                ],
+                response_format={"type": "json_object"},
+            )
+            # Success path
+            try:
+                return json.loads(r.choices[0].message.content), r.usage.total_tokens
+            except (json.JSONDecodeError, AttributeError) as e:
+                # Parse error is not retryable — the model returned malformed JSON.
+                # Bubble it up as before so the caller sees the raw text.
+                return (
+                    {"parse_error": r.choices[0].message.content or str(e)},
+                    r.usage.total_tokens if r.usage else 0,
+                )
+ 
+        except RateLimitError as e:
+            # SDK already retried max_retries times — we won't try again for 429.
+            _log.warning(f"openai rate limit (SDK-retries exhausted): {e}")
+            last_error = ("rate_limit", str(e))
+            break  # No point retrying at app level — the SDK just did that
+ 
+        except APIStatusError as e:
+            # Non-retryable 4xx (400/401/403/404) — bubble up immediately.
+            if 400 <= e.status_code < 500 and e.status_code != 429:
+                _log.error(f"openai non-retryable {e.status_code}: {e}")
+                return (
+                    {"error": "openai_non_retryable",
+                     "status_code": e.status_code,
+                     "message": str(e)},
+                    0,
+                )
+            # 5xx — SDK already retried; give up
+            _log.warning(f"openai 5xx (SDK-retries exhausted): {e.status_code} {e}")
+            last_error = (f"http_{e.status_code}", str(e))
+            break
+ 
+        except (APITimeoutError, APIConnectionError) as e:
+            # Network-layer failure — retryable at the app level.
+            wait = (2 ** attempt) * (1 + random.uniform(-0.25, 0.25))
+            _log.warning(
+                f"openai network error (attempt {attempt+1}/{max_app_retries}): "
+                f"{type(e).__name__}: {e} — sleeping {wait:.2f}s"
+            )
+            last_error = (type(e).__name__, str(e))
+            if attempt < max_app_retries - 1:
+                time.sleep(wait)
+                continue
+            # Last attempt failed — fall through to structured error return
+ 
+    # All retries exhausted — return structured error so pipeline continues
+    error_type, error_msg = last_error or ("unknown", "unknown error")
+    _log.error(f"openai call failed after {max_app_retries} attempts: {error_type}")
+    return (
+        {
+            "error": "openai_unavailable",
+            "error_type": error_type,
+            "message": error_msg,
+            # Provide a synthetic verdict so downstream nodes handle it gracefully
+            "verdict": "ERROR",
+            "confidence": 0.0,
+            "reasoning": f"OpenAI call failed: {error_type}. Sweep did not complete.",
+        },
+        0,
+    )
+ 
 
 
 # ─────────────────────────────────────────────────────────────────────────
