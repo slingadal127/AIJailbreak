@@ -25,6 +25,8 @@ import os, json, sqlite3, hashlib
 from datetime import datetime, timedelta
 from collections import Counter
 from typing import TypedDict, List, Dict, Any, Optional
+import chromadb
+from chromadb.utils import embedding_functions
 
 from dotenv import load_dotenv
 import os, json, time, random, logging
