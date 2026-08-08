@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 COPY api.py auth.py auth_db.py redteam_core.py \
+     redteam_dataset_loader.py \
      redteam_filter.py redteam_drift.py redteam_bias.py \
      redteam_adaptive.py redteam_metrics.py \
      judge_eval_set.json ./
